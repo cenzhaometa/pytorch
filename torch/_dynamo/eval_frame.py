@@ -152,7 +152,23 @@ class OptimizedModule(torch.nn.Module):
             self._forward = self.forward
             self.forward = self._call_lazy_check
 
+    # CHECK-IF-THERE-IS-BETTER-WAY
+    # When Dynamo compiles a nn module, it traces the _wrapped_call_impl (and
+    # eventually inlines forward) and updates the frame object to run guards
+    # etc. The unintended consequence is that since _wrapped_call_impl is a code
+    # object, it is shared between the original nn module and this
+    # OptimizedModule as well. So when OptimizedModule is executed, it calls
+    # _wrapped_call_impl and retriggers Dynamo. We don't want that.  So, here we
+    # override the __call__ to local _call_impl which calls base class
+    # _call_impl. This prevents the call to _wrapped_call_impl and prevents
+    # Dynamo trigger.
+    def _call_impl(self, *args, **kwargs):
+        return super()._call_impl(*args, **kwargs)
+
+    __call__ = _call_impl
+
     def __getstate__(self):
+        # Do we need to pop _call_impl here?
         state = dict(self.__dict__)
         state.pop("forward", None)
         state.pop("__call__", None)
@@ -1215,7 +1231,13 @@ def export(
             automatic_dynamic_shapes=False,
             capture_dynamic_output_shape_ops=True,
             capture_scalar_outputs=True,
-        ):
+        ), trace_rules.dont_trace_nn_module_wrapped_call_impl():
+            # TODO(export-team) - discrepancy between torch.compile and
+            # torch.export because torch.compile is planning to inline the
+            # _call_impl (one level above forward) to inline hooks. But doing
+            # that for export breaks many tests because (1) tests are hardcoded
+            # to assume that tracing starts from forward, and (2) some
+            # discrepancies between strict and non strict mode.
             opt_f = optimize_assert(
                 dynamo_normalization_capturing_compiler,
                 hooks=Hooks(

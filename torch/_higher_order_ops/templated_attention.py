@@ -78,7 +78,6 @@ def math_attention(
     # Logsumexp of the scores is needed for the backward pass
     if any(t.requires_grad for t in (query, key, value)):
         logsumexp = scores.logsumexp(dim=-1)
-        logsumexp = logsumexp.view(-1, logsumexp.size(-1))
     else:
         logsumexp = query.new_empty(0)
 
@@ -219,9 +218,7 @@ def templated_attention_fake_tensor_mode(
     with mode:
         if any_requires_grad:
             batch_size, num_heads, seq_len_q, _ = query.shape
-            logsumexp = query.new_empty(batch_size, num_heads, seq_len_q).view(
-                -1, seq_len_q
-            )
+            logsumexp = query.new_empty(batch_size, num_heads, seq_len_q)
         else:
             logsumexp = query.new_empty(0)
         return torch.empty_like(query, memory_format=torch.contiguous_format), logsumexp

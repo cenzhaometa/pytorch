@@ -5739,8 +5739,13 @@ def templated_attention(*args, **kwargs):
                     logsumexp_shape
                 ),  # TODO In eager we rollup, but i dont think we need to
             )
-            lse_tensorbox = TensorBox.create(InputBuffer("logsumexp", logsumexp_layout))
+            lse_buffer = InputBuffer(None, logsumexp_layout)
+            lse_buffer.name = V.graph.register_buffer(lse_buffer)
+            lse_tensorbox = TensorBox.create(lse_buffer)
+            lse_tensorbox.name = V.graph.register_buffer(lse_tensorbox)
             mark_node_as_mutating(lse_tensorbox)
+
+            lse = empty_strided(logsumexp_shape, None, dtype=query.get_dtype(), device=output_buffer.get_device())
 
             for BLOCK_M, BLOCK_N, num_warps, num_stages in [
                 (128, 64, 4, 3),
@@ -5750,7 +5755,7 @@ def templated_attention(*args, **kwargs):
             ]:
                 sdpa_template.maybe_append_choice(
                     choices=choices,
-                    input_nodes=(query, key, value, lse_tensorbox),
+                    input_nodes=(query, key, value, lse),
                     layout=layout,
                     subgraphs=subgraph_buffer,
                     num_stages=num_stages,
@@ -5759,10 +5764,13 @@ def templated_attention(*args, **kwargs):
                     BLOCK_N=BLOCK_N,
                     BLOCK_DMODEL=query.get_size()[-1],
                 )
-            return [
+            out = autotune_select_algorithm("sdpa", choices, [query, key, value], layout), lse
+            import ipdb; ipdb.set_trace()
+            return out
+            return (
                 autotune_select_algorithm("sdpa", choices, [query, key, value], layout),
                 lse_tensorbox,
-            ]
+            )
     raise ValueError("TemplatedAttention was passed a subgraph with no output node!")
 
 

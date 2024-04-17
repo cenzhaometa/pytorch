@@ -5745,7 +5745,12 @@ def templated_attention(*args, **kwargs):
             lse_tensorbox.name = V.graph.register_buffer(lse_tensorbox)
             mark_node_as_mutating(lse_tensorbox)
 
-            lse = empty_strided(logsumexp_shape, None, dtype=query.get_dtype(), device=output_buffer.get_device())
+            lse = empty_strided(
+                logsumexp_shape,
+                None,
+                dtype=query.get_dtype(),
+                device=output_buffer.get_device(),
+            )
 
             for BLOCK_M, BLOCK_N, num_warps, num_stages in [
                 (128, 64, 4, 3),
@@ -5764,12 +5769,9 @@ def templated_attention(*args, **kwargs):
                     BLOCK_N=BLOCK_N,
                     BLOCK_DMODEL=query.get_size()[-1],
                 )
-            out = autotune_select_algorithm("sdpa", choices, [query, key, value], layout), lse
-            import ipdb; ipdb.set_trace()
-            return out
             return (
                 autotune_select_algorithm("sdpa", choices, [query, key, value], layout),
-                lse_tensorbox,
+                lse,
             )
     raise ValueError("TemplatedAttention was passed a subgraph with no output node!")
 

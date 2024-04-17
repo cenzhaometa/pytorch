@@ -901,7 +901,6 @@ class GraphLowering(torch.fx.Interpreter):
         raise AssertionError()
 
     def output(self, target, args, kwargs):
-        import ipdb; ipdb.set_trace()
         result = super().output(target, args, kwargs)
         if not isinstance(result, (tuple, list)):
             # nested subgraphs can have singleton outputs

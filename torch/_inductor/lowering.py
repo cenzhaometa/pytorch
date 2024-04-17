@@ -43,7 +43,6 @@ from .ir import (
     ExpandView,
     IndexingConstant,
     is_triton,
-    mark_node_as_mutating,
     ops_wrapper,
     PermuteView,
     Pointwise,
@@ -5731,21 +5730,7 @@ def templated_attention(*args, **kwargs):
             from .select_algorithm import autotune_select_algorithm
 
             logsumexp_shape = query.get_size()[:-1]  # [B, H, M]
-            logsumexp_layout = FixedLayout(
-                output_buffer.get_device(),
-                query.get_dtype(),
-                logsumexp_shape,
-                make_contiguous_strides_for(
-                    logsumexp_shape
-                ),  # TODO In eager we rollup, but i dont think we need to
-            )
-            lse_buffer = InputBuffer(None, logsumexp_layout)
-            lse_buffer.name = V.graph.register_buffer(lse_buffer)
-            lse_tensorbox = TensorBox.create(lse_buffer)
-            lse_tensorbox.name = V.graph.register_buffer(lse_tensorbox)
-            mark_node_as_mutating(lse_tensorbox)
-
-            lse = empty_strided(
+            logsumexp = empty_strided(
                 logsumexp_shape,
                 None,
                 dtype=query.get_dtype(),
@@ -5760,7 +5745,7 @@ def templated_attention(*args, **kwargs):
             ]:
                 sdpa_template.maybe_append_choice(
                     choices=choices,
-                    input_nodes=(query, key, value, lse),
+                    input_nodes=(query, key, value, logsumexp),
                     layout=layout,
                     subgraphs=subgraph_buffer,
                     num_stages=num_stages,
@@ -5771,7 +5756,7 @@ def templated_attention(*args, **kwargs):
                 )
             return (
                 autotune_select_algorithm("sdpa", choices, [query, key, value], layout),
-                lse,
+                logsumexp,
             )
     raise ValueError("TemplatedAttention was passed a subgraph with no output node!")
 

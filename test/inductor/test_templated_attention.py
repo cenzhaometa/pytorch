@@ -8,6 +8,9 @@ from unittest import expectedFailure, skipUnless
 from unittest.mock import patch
 
 import torch
+from torch._higher_order_ops.templated_attention import (
+    templated_attention as templated_attention_hop,
+)
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch.nn.attention._templated_attention import _compose, _templated_attention
 from torch.testing._internal import common_utils
@@ -176,6 +179,42 @@ class TestTemplatedSDPA(InductorTestCase):
             return score * 2
 
         self.run_test(score_mod)
+
+    @supported_platform
+    def test_logsumexp_correctness(self):
+        score_mod = _identity_mod
+
+        @torch.compile
+        def sdpa_hop(q, k, v, score_mod):
+            return templated_attention_hop(q, k, v, score_mod)
+
+        q = torch.randn(
+            (4, 8, 2048, 64), dtype=torch.float32, device="cuda", requires_grad=True
+        )
+        k = torch.randn(
+            (4, 8, 2048, 64), dtype=torch.float32, device="cuda", requires_grad=True
+        )
+        v = torch.randn(
+            (4, 8, 2048, 64), dtype=torch.float32, device="cuda", requires_grad=True
+        )
+        ref_out, ref_lse = templated_attention_hop(
+            q.to(torch.float64), k.to(torch.float64), v.to(torch.float64), score_mod
+        )
+        compiled_out, compiled_lse = sdpa_hop(q, k, v, score_mod)
+
+        tolerance = Tolerances(atol=2e-2, rtol=2e-2)
+        torch.testing.assert_close(
+            ref_out.to(dtype=torch.float32),
+            compiled_out.to(dtype=torch.float32),
+            atol=tolerance.atol,
+            rtol=tolerance.rtol,
+        )
+        torch.testing.assert_close(
+            ref_lse.to(dtype=torch.float32),
+            compiled_lse.to(dtype=torch.float32),
+            atol=tolerance.atol,
+            rtol=tolerance.rtol,
+        )
 
 
 common_utils.instantiate_parametrized_tests(TestTemplatedSDPA)

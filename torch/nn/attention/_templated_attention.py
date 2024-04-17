@@ -86,4 +86,7 @@ def _templated_attention(
         raise ValueError(
             "NYI: The target sequence length (L) of the query tensor must match the source sequence length (S) of the key tensor."
         )
-    return templated_attention_hop(query, key, value, score_mod)
+    out, _ = templated_attention_hop(query, key, value, score_mod)
+
+    # Drop the logsumexp value since this is only needed for backwards
+    return out

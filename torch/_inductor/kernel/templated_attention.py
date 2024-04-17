@@ -23,7 +23,7 @@ sdpa_template = TritonTemplate(
     name="sdpa",
     grid=sdpa_grid,
     source=r"""
-{{def_kernel("Q", "K", "V")}}
+{{def_kernel("Q", "K", "V", "LSE")}}
     # Sub notation for this kernel:
     # Q: Query, K: Key, V: Value
     # M: Number of queries, N: Number of keys/values, D: Model dimension
@@ -144,18 +144,21 @@ sdpa_template = TritonTemplate(
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
 
-    # write back l and m
+    # Store output and logsumexp
     acc = acc / l_i[:, None]
-    # TODO For backward support we need to add the Logsumexp
-    # l_ptrs = L + off_hz * N_CTX + offs_m
-    # tl.store(l_ptrs, m_i + tl.math.log2(l_i))
-
     idx_z = tl.program_id(1) // H
     idx_h = tl.program_id(1) % H
     idx_m = offs_m[:, None]
     idx_d = tl.arange(0, BLOCK_DMODEL)[None, :]
+
     # TODO generalize and add proper mask support
     mask = (idx_m != -1) & (idx_d != -1)
     {{store_output(("idx_z", "idx_h", "idx_m", "idx_d"), "acc")}}
+
+    # TODO FIX ME and use 2^x instead of exp
+    # TODO dont want to write this if we dont require grad
+    l_ptrs = LSE + off_hz * N_CTX + offs_m
+    lse = m_i + tl.math.log(l_i)
+    tl.store(l_ptrs, lse)
  """,
 )

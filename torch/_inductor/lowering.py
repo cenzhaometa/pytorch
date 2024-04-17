@@ -43,6 +43,7 @@ from .ir import (
     ExpandView,
     IndexingConstant,
     is_triton,
+    mark_node_as_mutating,
     ops_wrapper,
     PermuteView,
     Pointwise,
@@ -5729,6 +5730,18 @@ def templated_attention(*args, **kwargs):
             choices: List[Any] = []
             from .select_algorithm import autotune_select_algorithm
 
+            logsumexp_shape = query.get_size()[:-1]  # [B, H, M]
+            logsumexp_layout = FixedLayout(
+                output_buffer.get_device(),
+                query.get_dtype(),
+                logsumexp_shape,
+                make_contiguous_strides_for(
+                    logsumexp_shape
+                ),  # TODO In eager we rollup, but i dont think we need to
+            )
+            lse_tensorbox = TensorBox.create(InputBuffer("logsumexp", logsumexp_layout))
+            mark_node_as_mutating(lse_tensorbox)
+
             for BLOCK_M, BLOCK_N, num_warps, num_stages in [
                 (128, 64, 4, 3),
                 (128, 128, 4, 3),
@@ -5737,7 +5750,7 @@ def templated_attention(*args, **kwargs):
             ]:
                 sdpa_template.maybe_append_choice(
                     choices=choices,
-                    input_nodes=(query, key, value),
+                    input_nodes=(query, key, value, lse_tensorbox),
                     layout=layout,
                     subgraphs=subgraph_buffer,
                     num_stages=num_stages,
@@ -5746,9 +5759,10 @@ def templated_attention(*args, **kwargs):
                     BLOCK_N=BLOCK_N,
                     BLOCK_DMODEL=query.get_size()[-1],
                 )
-            return autotune_select_algorithm(
-                "sdpa", choices, [query, key, value], layout
-            )
+            return [
+                autotune_select_algorithm("sdpa", choices, [query, key, value], layout),
+                lse_tensorbox,
+            ]
     raise ValueError("TemplatedAttention was passed a subgraph with no output node!")
 
 

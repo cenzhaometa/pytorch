@@ -76,10 +76,9 @@ def math_attention(
     scores = score_mod(scores, b, h, m, n, *other_buffers)
 
     # Logsumexp of the scores is needed for the backward pass
-    if any(t.requires_grad for t in (query, key, value)):
-        logsumexp = scores.logsumexp(dim=-1)
-    else:
-        logsumexp = query.new_empty(0)
+    # TODO For now lets just unconditiaonlly return the logsumexp, we can optimize this later
+    # if any(t.requires_grad for t in (query, key, value)):
+    logsumexp = scores.logsumexp(dim=-1)
 
     scores = scores.softmax(dim=-1)
 
@@ -214,11 +213,7 @@ def templated_attention_fake_tensor_mode(
     score_mod: Callable,
     *other_buffers: Tuple[torch.Tensor, ...],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    any_requires_grad = any(t.requires_grad for t in (query, key, value))
     with mode:
-        if any_requires_grad:
-            batch_size, num_heads, seq_len_q, _ = query.shape
-            logsumexp = query.new_empty(batch_size, num_heads, seq_len_q)
-        else:
-            logsumexp = query.new_empty(0)
+        batch_size, num_heads, seq_len_q, _ = query.shape
+        logsumexp = query.new_empty(batch_size, num_heads, seq_len_q)
         return torch.empty_like(query, memory_format=torch.contiguous_format), logsumexp

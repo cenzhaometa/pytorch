@@ -5755,7 +5755,9 @@ def templated_attention(*args, **kwargs):
                     BLOCK_DMODEL=query.get_size()[-1],
                 )
             return (
-                autotune_select_algorithm("sdpa", choices, [query, key, value], layout),
+                autotune_select_algorithm(
+                    "sdpa", choices, [query, key, value, logsumexp], layout
+                ),
                 logsumexp,
             )
     raise ValueError("TemplatedAttention was passed a subgraph with no output node!")

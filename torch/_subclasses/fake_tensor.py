@@ -752,6 +752,8 @@ class DispatchCacheInfo:
 # new allocations of Tensors which have non-meta storage so
 # memory should not significantly increase.
 
+UNHASHABLE = object()
+
 
 class FakeTensorMode(TorchDispatchMode):
     cache: Dict[_DispatchCacheKey, _DispatchCacheEntry] = {}
@@ -940,11 +942,8 @@ class FakeTensorMode(TorchDispatchMode):
         Create a cache key given the dispatch args. Raises _BypassDispatchCache
         for any situation that precludes caching.
         """
-        key_values = (
+        key_values = [
             func,
-            # Translate any FakeTensor args to metadata.
-            self._prep_args_for_hash(args) if args else (),
-            self._prep_args_for_hash(kwargs) if kwargs else (),
             # Capture the default_dtype mode since that can affect the output tensor,
             # e.g., when operating on constant float values.
             torch.get_default_dtype(),
@@ -958,8 +957,13 @@ class FakeTensorMode(TorchDispatchMode):
             # Disallowing dynamic shapes can introduce a DynamicOutputShapeException
             # where it wasn't seen on a previous instance of the same op.
             self.shape_env.settings if self.shape_env else None,
-        )
-        return _DispatchCacheKey(key_values)
+        ]
+        # Translate any FakeTensor args to metadata.
+        if args:
+            self._prep_args_for_hash(key_values, args)
+        if kwargs:
+            self._prep_args_for_hash(key_values, kwargs)
+        return _DispatchCacheKey(tuple(key_values))
 
     def _validate_cache_key(
         self,
@@ -1000,7 +1004,10 @@ class FakeTensorMode(TorchDispatchMode):
         ):
             raise _BypassDispatchCache("CompositeImplicitAutograd")
 
-    def _prep_args_for_hash(self, args: Any) -> Any:
+        self._verify_args_for_hash(args)
+        self._verify_args_for_hash(kwargs)
+
+    def _prep_args_for_hash(self, output: List[Any], args: Any):
         """
         Translate the provided args into a form suitable for caching at FakeTensor
         dispatch, i.e., convert unhashable types like lists & dicts into tuples and
@@ -1008,35 +1015,62 @@ class FakeTensorMode(TorchDispatchMode):
         unsupported cases that should bypass caching.
         """
         if isinstance(args, dict):
-            args = list(args.keys()) + list(args.values())
+            self._prep_args_for_hash(output, args.keys())
+            self._prep_args_for_hash(output, args.values())
+            return
 
-        result = []
+        for arg in args:
+            if isinstance(arg, FakeTensor):
+                if arg._has_symbolic_sizes_strides:
+                    # This will get caught by _verify_args_for_hash later. We
+                    # can't just ignore it because it's an unhashable value. Use
+                    # a sentinel to indicate the unhashable value (so we don't
+                    # collide with a "good" hash).
+                    output.append(UNHASHABLE)
+                    continue
+                output.append(extract_tensor_metadata(arg))
+            elif isinstance(arg, (torch.SymBool, torch.SymInt, torch.SymFloat)):
+                # Caught by _verify_args_for_hash later.
+                output.append(UNHASHABLE)
+            elif isinstance(arg, (list, tuple, dict)):
+                self._prep_args_for_hash(output, arg)
+            else:
+                # It's important to capture the type of the arg since, e.g., 1 and 1.0
+                # hash to the same value, but can produce different dtypes for the
+                # output tensor.
+                output.append(type(arg))
+                output.append(arg)
+
+    def _verify_args_for_hash(self, args: Any):
+        """
+        Translate the provided args into a form suitable for caching at FakeTensor
+        dispatch, i.e., convert unhashable types like lists & dicts into tuples and
+        convert FakeTensors into metadata. Raises _BypassDispatchCache to signal
+        unsupported cases that should bypass caching.
+        """
+        if isinstance(args, dict):
+            self._verify_args_for_hash(args.keys())
+            self._verify_args_for_hash(args.values())
+            return
+
         for arg in args:
             if isinstance(arg, FakeTensor):
                 if not self.is_our_fake(arg):
                     raise _BypassDispatchCache("not our fake")
                 if arg._has_symbolic_sizes_strides:
-                    raise _BypassDispatchCache("symbolic shape")
+                    raise _BypassDispatchCache("symbolic sizes")
                 if arg.constant is not None:
                     raise _BypassDispatchCache("constant attribute")
                 if arg.is_sparse:
                     raise _BypassDispatchCache("sparse tensor")
                 if is_sparse_compressed(arg):
                     raise _BypassDispatchCache("sparse compressed tensor")
-                result.append(extract_tensor_metadata(arg))
             elif isinstance(arg, torch.Tensor):
                 raise _BypassDispatchCache("non-fake tensor")
             elif isinstance(arg, (torch.SymBool, torch.SymInt, torch.SymFloat)):
                 raise _BypassDispatchCache("symbolic shape")
             elif isinstance(arg, (list, tuple, dict)):
-                result.extend(self._prep_args_for_hash(arg))
-            else:
-                # It's important to capture the type of the arg since, e.g., 1 and 1.0
-                # hash to the same value, but can produce different dtypes for the
-                # output tensor.
-                result.append((type(arg), arg))
-
-        return tuple(result)
+                self._verify_args_for_hash(arg)
 
     def _make_cache_entry(
         self,
